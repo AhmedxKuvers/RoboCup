@@ -102,3 +102,116 @@ class Strategy():
 
         return target_dir
     
+    def get_goalkeeper_position(self):
+        """
+        Calculate optimal goalkeeper position based on ball location.
+        GK should stay between ball and goal, with limited movement range.
+        """
+        ball_x, ball_y = self.ball_2d
+        
+        # Goal center at (-15, 0)
+        goal_x = -15.0
+        goal_y = 0.0
+        
+        # Calculate where GK should position between ball and goal
+        # GK stays on a line from ball to goal, but limited range
+        if ball_x < -10:  # Ball very close to our goal
+            target_x = max(-14.5, ball_x + 1.0)  # Stay slightly in front
+            target_y = np.clip(ball_y * 0.3, -2.0, 2.0)  # Limited lateral movement
+        else:  # Ball further away
+            # Position on the line from ball to goal center
+            direction = np.array([goal_x - ball_x, goal_y - ball_y])
+            dist = np.linalg.norm(direction)
+            if dist > 0.1:
+                direction = direction / dist
+                # Position 1-2 meters in front of goal
+                target_x = goal_x + direction[0] * 1.5
+                target_y = goal_y + direction[1] * 1.5
+            else:
+                target_x = -13.5
+                target_y = 0.0
+            
+            # Clamp to reasonable GK area
+            target_x = np.clip(target_x, -14.5, -11.0)
+            target_y = np.clip(target_y, -3.0, 3.0)
+        
+        return np.array([target_x, target_y])
+    
+    def get_defensive_position(self, my_unum, assigned_formation_pos):
+        """
+        When opponent has possession, position defensively:
+        - Stay between opponent and our goal
+        - Mark nearest opponent or cover passing lanes
+        """
+        # If opponent is much closer to ball, shift back defensively
+        if self.min_opponent_ball_dist + 1.0 < self.min_teammate_ball_dist:
+            # Opponent has clear possession, fall back
+            defensive_shift = np.array([-3.0, 0.0])
+            new_pos = assigned_formation_pos + defensive_shift
+            new_pos[0] = np.clip(new_pos[0], -14.5, assigned_formation_pos[0])
+            return new_pos
+        
+        return assigned_formation_pos
+    
+    def get_kickoff_position(self, my_unum, init_pos, is_our_kickoff):
+        """
+        Handle kickoff positioning rules.
+        - Can't cross midfield before kickoff
+        - Player taking kickoff positions near ball
+        """
+        if is_our_kickoff:
+            # Player closest to ball takes kickoff
+            if my_unum == self.active_player_unum:
+                return np.array([-0.5, 0.0])  # Just behind ball
+            else:
+                # Others stay in own half
+                pos = np.array(init_pos)
+                pos[0] = np.clip(pos[0], -14.5, -0.5)
+                return pos
+        else:
+            # Opponent kickoff - stay in own half, away from center circle
+            pos = np.array(init_pos)
+            pos[0] = np.clip(pos[0], -14.5, -3.0)  # Stay back
+            
+            # Avoid center circle (radius 2.5 from center)
+            if np.linalg.norm(pos) < 3.0:
+                pos[0] = -3.5
+            
+            return pos
+    
+    def get_kick_in_position(self, my_unum, is_our_kick_in):
+        """
+        Position for kick-in situations.
+        - Taking team player near ball
+        - Others spread for passing options
+        """
+        if is_our_kick_in:
+            if my_unum == self.active_player_unum:
+                # Move to ball to take kick-in
+                return self.ball_2d
+            else:
+                # Position for pass reception
+                # Spread out along the field
+                y_offset = (my_unum - 3) * 3.0  # Spread players
+                return np.array([self.ball_2d[0] + 2.0, np.clip(y_offset, -9.0, 9.0)])
+        else:
+            # Opponent kick-in: mark their players, stay away from ball
+            return self.get_defensive_position(my_unum, np.array(self.mypos))
+    
+    def should_clear_ball(self):
+        """
+        Determine if active player should just clear/kick ball away.
+        Used when under pressure near our goal.
+        """
+        ball_x = self.ball_2d[0]
+        
+        # Ball in our defensive third and opponent is close
+        if ball_x < -5.0 and self.min_opponent_ball_dist < 3.0:
+            return True
+        
+        # Ball very close to our goal
+        if ball_x < -10.0:
+            return True
+            
+        return False
+
