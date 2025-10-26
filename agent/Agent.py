@@ -215,7 +215,7 @@ class Agent(Base_Agent):
         drawer = self.world.draw
 
         # -----------------------------------------------------------------
-        # --- STEP 4: "MAIN BRAIN" - SMART KICK-OFF ---
+        # --- STEP 5: "MAIN BRAIN" - FIX KICK-OFF RULES ---
         # -----------------------------------------------------------------
         
         # --- Handle Our KickOff ---
@@ -224,20 +224,24 @@ class Agent(Base_Agent):
             
             # Check if I am the active player (the one at the center)
             if strategyData.active_player_unum == strategyData.robot_model.unum:
-                # I am active: Kick the ball forward to start play
-                target = (5, 0) # Kick it 5 meters forward
-                drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "attack_line")
+                # --- FIX for Double-Touch Foul ---
+                # Pass to our Midfielder (Player 4) instead of kicking into space
+                # strategyData.teammate_positions is 0-indexed, so unum 4 is index 3
+                target = strategyData.teammate_positions[3] 
+                drawer.annotation((0,8.5), "Passing to Player 4" , drawer.Color.cyan, "pass_target")
+                drawer.line(strategyData.mypos, target, 2, drawer.Color.cyan, "attack_line")
                 return self.kickTarget(strategyData, strategyData.mypos, target)
             else:
                 # I am support: Hold my initial position
+                drawer.clear("pass_target")
                 return self.move(self.init_pos)
 
         # --- Handle Their KickOff ---
         elif strategyData.play_mode == self.world.M_THEIR_KICKOFF:
             drawer.annotation((0,10.5), "GAME MODE: Their KickOff" , drawer.Color.white, "status")
-            # We are on defense. Everyone acts as a support player.
-            # Run to our defensive spots but DO NOT attack the ball.
-            return self.run_support_strategy(strategyData)
+            # --- FIX for Illegal Position ---
+            # Everyone holds their safe, initial position.
+            return self.move(self.init_pos)
 
         # --- Handle Set Plays (KickIn, Corner, etc.) ---
         elif strategyData.PM_GROUP == self.world.MG_OUR_KICK or strategyData.PM_GROUP == self.world.MG_THEIR_KICK:
