@@ -248,8 +248,8 @@ class Agent(Base_Agent):
 
     def run_play_on_strategy(self, strategyData):
         """
-        This is the "PlayOn" logic we built in Step 1.
-        We've moved it into its own function to keep select_skill clean.
+        This is the "PlayOn" logic.
+        We've updated it to include "social distancing" for support players.
         """
         drawer = self.world.draw
         
@@ -260,6 +260,7 @@ class Agent(Base_Agent):
             target = (15,0) # Opponent goal
             drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "attack_line")
             drawer.clear("target_line") # Clear the blue formation line if it exists
+            drawer.clear("retreat_line") # Clear the orange retreat line
 
             return self.kickTarget(strategyData, strategyData.mypos, target)
 
@@ -270,13 +271,41 @@ class Agent(Base_Agent):
             formation_positions = GenerateBasicFormation()
             point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
             strategyData.my_desired_position = point_preferences[strategyData.player_unum]
+
+            # --- STEP 3: Give the Active Player Space ---
+            ball_pos = strategyData.ball_2d
+            assigned_pos = strategyData.my_desired_position
             
-            # Draw a blue line to our assigned spot
-            drawer.line(strategyData.mypos, strategyData.my_desired_position, 2, drawer.Color.blue, "target_line")
-            drawer.clear("attack_line") # Clear the red attack line if it exists
+            # Calculate distance from our assigned spot to the ball
+            dist_to_ball = np.linalg.norm(assigned_pos - ball_pos)
+            MIN_SUPPORT_DIST = 2.5 # (in meters) You can tune this value
             
-            # Move to the assigned position, but face the ball
-            return self.move(strategyData.my_desired_position, orientation=strategyData.ball_dir)
+            final_target = assigned_pos
+            drawer.clear("retreat_line") # Clear old retreat lines
+            
+            if dist_to_ball < MIN_SUPPORT_DIST:
+                # Our spot is too close to the ball. Let's back off.
+                # Get the vector from the ball to our assigned spot
+                vec_from_ball = assigned_pos - ball_pos
+                
+                # Check for zero vector (to avoid division by zero)
+                if np.linalg.norm(vec_from_ball) > 0.1:
+                    # Normalize it and multiply by the safe distance to get a new target
+                    norm_vec = vec_from_ball / np.linalg.norm(vec_from_ball)
+                    final_target = ball_pos + (norm_vec * MIN_SUPPORT_DIST)
+                else:
+                    # We are assigned right on top of the ball, just move back
+                    final_target = np.array([ball_pos[0] - MIN_SUPPORT_DIST, ball_pos[1]])
+
+                # Draw an orange line showing our retreat path
+                drawer.line(assigned_pos, final_target, 1, drawer.Color.orange, "retreat_line")
+
+            # Draw a blue line to our final target spot
+            drawer.line(strategyData.mypos, final_target, 2, drawer.Color.blue, "target_line")
+            drawer.clear("attack_line") 
+            
+            # Move to the final target, but face the ball
+            return self.move(final_target, orientation=strategyData.ball_dir)
         
 
 
