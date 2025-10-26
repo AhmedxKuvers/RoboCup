@@ -213,50 +213,69 @@ class Agent(Base_Agent):
     def select_skill(self,strategyData):
         #--------------------------------------- 2. Decide action
         drawer = self.world.draw
-        path_draw_options = self.path_manager.draw_options
 
+        # -----------------------------------------------------------------
+        # --- STEP 2: "MAIN BRAIN" - HANDLE GAME MODES ---
+        # -----------------------------------------------------------------
+        
+        # --- Handle KickOff (Ours or Theirs) ---
+        if strategyData.play_mode == self.world.M_OUR_KICKOFF or strategyData.play_mode == self.world.M_THEIR_KICKOFF:
+            # During kickoff, just hold your initial position.
+            # The 'beam' function already puts us in init_pos.
+            # We'll just move there again to be safe.
+            drawer.annotation((0,10.5), "GAME MODE: KickOff" , drawer.Color.white, "status")
+            return self.move(self.init_pos)
 
-        #------------------------------------------------------
-        #Role Assignment
-        if strategyData.active_player_unum == strategyData.robot_model.unum: # I am the active player 
-            drawer.annotation((0,10.5), "Role Assignment Phase" , drawer.Color.yellow, "status")
+        # --- Handle Set Plays (KickIn, Corner, etc.) ---
+        # This is when the ball is out of bounds or a foul happened.
+        elif strategyData.PM_GROUP == self.world.MG_OUR_KICK or strategyData.PM_GROUP == self.world.MG_THEIR_KICK:
+            drawer.annotation((0,10.5), "GAME MODE: Set Play" , drawer.Color.white, "status")
+            # For now, just have the active player attack the ball
+            # and support players hold formation.
+            # This is a good default for all set plays.
+            return self.run_play_on_strategy(strategyData)
+            
+        # --- Handle Regular Gameplay ---
+        elif strategyData.play_mode == self.world.M_PLAY_ON:
+            # This is normal soccer. Run the strategy we built in Step 1.
+            return self.run_play_on_strategy(strategyData)
+
+        # --- Fallback / Do Nothing ---
         else:
-            drawer.clear("status")
-
-        formation_positions = GenerateBasicFormation()
-        point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
-        strategyData.my_desired_position = point_preferences[strategyData.player_unum]
-        strategyData.my_desried_orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(strategyData.my_desired_position)
-
-        drawer.line(strategyData.mypos, strategyData.my_desired_position, 2,drawer.Color.blue,"target line")
-
-        if not strategyData.IsFormationReady(point_preferences):
-            return self.move(strategyData.my_desired_position, orientation=strategyData.my_desried_orientation)
-        #else:
-        #     return self.move(strategyData.my_desired_position, orientation=strategyData.ball_dir)
+            # If we don't know the mode, just stand still.
+            return self.move(strategyData.mypos)
 
 
-    
-        #------------------------------------------------------
-        # Example Behaviour
-        target = (15,0) # Opponents Goal
+    def run_play_on_strategy(self, strategyData):
+        """
+        This is the "PlayOn" logic we built in Step 1.
+        We've moved it into its own function to keep select_skill clean.
+        """
+        drawer = self.world.draw
+        
+        # Check if I am the active player (closest to the ball)
+        if strategyData.active_player_unum == strategyData.robot_model.unum: 
+            # --- I AM THE ACTIVE PLAYER ---
+            drawer.annotation((0,10.5), "ACTIVE: Attacking" , drawer.Color.red, "status")
+            target = (15,0) # Opponent goal
+            drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "attack_line")
+            drawer.clear("target_line") # Clear the blue formation line if it exists
 
-        if strategyData.active_player_unum == strategyData.robot_model.unum: # I am the active player 
-            drawer.annotation((0,10.5), "Pass Selector Phase" , drawer.Color.yellow, "status")
+            return self.kickTarget(strategyData, strategyData.mypos, target)
+
         else:
-            drawer.clear_player()
-
-        if strategyData.active_player_unum == strategyData.robot_model.unum: # I am the active player 
-            pass_reciever_unum = strategyData.player_unum + 1 # This starts indexing at 1, therefore player 1 wants to pass to player 2
-            if pass_reciever_unum != 6:
-                target = strategyData.teammate_positions[pass_reciever_unum-1] # This is 0 indexed so we actually need to minus 1 
-            else:
-                target = (15,0) 
-
-            drawer.line(strategyData.mypos, target, 2,drawer.Color.red,"pass line")
-            return self.kickTarget(strategyData,strategyData.mypos,target)
-        else:
-            drawer.clear("pass line")
+            # --- I AM A SUPPORT PLAYER ---
+            drawer.annotation((0,10.5), "SUPPORT: Moving to position" , drawer.Color.yellow, "status")
+            
+            formation_positions = GenerateBasicFormation()
+            point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
+            strategyData.my_desired_position = point_preferences[strategyData.player_unum]
+            
+            # Draw a blue line to our assigned spot
+            drawer.line(strategyData.mypos, strategyData.my_desired_position, 2, drawer.Color.blue, "target_line")
+            drawer.clear("attack_line") # Clear the red attack line if it exists
+            
+            # Move to the assigned position, but face the ball
             return self.move(strategyData.my_desired_position, orientation=strategyData.ball_dir)
         
 
