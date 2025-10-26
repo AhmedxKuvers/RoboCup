@@ -215,69 +215,383 @@ class Agent(Base_Agent):
         drawer = self.world.draw
 
         # -----------------------------------------------------------------
-        # --- STEP 2: "MAIN BRAIN" - HANDLE GAME MODES ---
+        # --- STEP 5: "MAIN BRAIN" - FIX KICK-OFF RULES ---
         # -----------------------------------------------------------------
         
-        # --- Handle KickOff (Ours or Theirs) ---
-        if strategyData.play_mode == self.world.M_OUR_KICKOFF or strategyData.play_mode == self.world.M_THEIR_KICKOFF:
-            # During kickoff, just hold your initial position.
-            # The 'beam' function already puts us in init_pos.
-            # We'll just move there again to be safe.
-            drawer.annotation((0,10.5), "GAME MODE: KickOff" , drawer.Color.white, "status")
+        # --- Handle Our KickOff ---
+        if strategyData.play_mode == self.world.M_OUR_KICKOFF:
+            drawer.annotation((0,10.5), "GAME MODE: Our KickOff" , drawer.Color.white, "status")
+            
+            # Check if I am the active player (the one at the center)
+            if strategyData.active_player_unum == strategyData.robot_model.unum:
+                # --- FIX for Double-Touch Foul ---
+                # Pass to our Midfielder (Player 4) instead of kicking into space
+                # strategyData.teammate_positions is 0-indexed, so unum 4 is index 3
+                target = strategyData.teammate_positions[3] 
+                drawer.annotation((0,8.5), "Passing to Player 4" , drawer.Color.cyan, "pass_target")
+                drawer.line(strategyData.mypos, target, 2, drawer.Color.cyan, "attack_line")
+                return self.kickTarget(strategyData, strategyData.mypos, target)
+            else:
+                # I am support: Hold my initial position
+                drawer.clear("pass_target")
+                return self.move(self.init_pos)
+
+        # --- Handle Their KickOff ---
+        elif strategyData.play_mode == self.world.M_THEIR_KICKOFF:
+            drawer.annotation((0,10.5), "GAME MODE: Their KickOff" , drawer.Color.white, "status")
+            # --- FIX for Illegal Position ---
+            # Everyone holds their safe, initial position.
             return self.move(self.init_pos)
 
-        # --- Handle Set Plays (KickIn, Corner, etc.) ---
-        # This is when the ball is out of bounds or a foul happened.
-        elif strategyData.PM_GROUP == self.world.MG_OUR_KICK or strategyData.PM_GROUP == self.world.MG_THEIR_KICK:
-            drawer.annotation((0,10.5), "GAME MODE: Set Play" , drawer.Color.white, "status")
-            # For now, just have the active player attack the ball
-            # and support players hold formation.
-            # This is a good default for all set plays.
-            return self.run_play_on_strategy(strategyData)
+        # --- Handle Our Set Plays ---
+        elif strategyData.PM_GROUP == self.world.MG_OUR_KICK:
+            # Determine specific type of set play
+            if strategyData.play_mode == self.world.M_OUR_CORNER_KICK:
+                return self.handle_our_corner_kick(strategyData)
+            elif strategyData.play_mode == self.world.M_OUR_FREE_KICK or strategyData.play_mode == self.world.M_OUR_DIR_FREE_KICK:
+                return self.handle_our_free_kick(strategyData)
+            elif strategyData.play_mode == self.world.M_OUR_KICK_IN:
+                return self.handle_our_kick_in(strategyData)
+            else:
+                # Other set plays (goal kick, etc.) use normal strategy
+                drawer.annotation((0,10.5), "GAME MODE: Our Set Play" , drawer.Color.white, "status")
+                return self.run_play_on_strategy(strategyData)
+        
+        # --- Handle Their Set Plays ---
+        elif strategyData.PM_GROUP == self.world.MG_THEIR_KICK:
+            drawer.annotation((0,10.5), "GAME MODE: Their Set Play - DEFEND" , drawer.Color.white, "status")
+            # Defensive positioning for opponent's set plays
+            return self.handle_defensive_set_play(strategyData)
             
         # --- Handle Regular Gameplay ---
         elif strategyData.play_mode == self.world.M_PLAY_ON:
-            # This is normal soccer. Run the strategy we built in Step 1.
+            # Run our normal PlayOn logic
             return self.run_play_on_strategy(strategyData)
 
         # --- Fallback / Do Nothing ---
         else:
-            # If we don't know the mode, just stand still.
             return self.move(strategyData.mypos)
+
+
+    def handle_our_corner_kick(self, strategyData):
+        """
+        Specialized strategy for our corner kicks
+        - Taker: Player closest to corner
+        - Attackers: Move into the box
+        - Target: Far post or best positioned player
+        """
+        drawer = self.world.draw
+        drawer.annotation((0,10.5), "CORNER KICK: Our Attack" , drawer.Color.cyan, "status")
+        
+        ball_pos = strategyData.ball_2d
+        
+        # Determine which corner (left or right based on ball Y position)
+        is_right_corner = ball_pos[1] > 0
+        
+        # Corner position
+        corner_pos = np.array([15, 11 if is_right_corner else -11])
+        
+        # Check if I'm the taker (closest to ball)
+        if strategyData.active_player_unum == strategyData.robot_model.unum:
+            # I'm taking the corner
+            drawer.annotation((0, 9), "CORNER TAKER: Looking for target" , drawer.Color.green, "role")
+            
+            # Target positions in the box
+            near_post = np.array([15, 3 if is_right_corner else -3])
+            far_post = np.array([15, -5 if is_right_corner else 5])
+            penalty_spot = np.array([13.5, 0])
+            
+            # Find best teammate to target (simple version - just closest to goal in box)
+            best_target = None
+            best_dist_to_goal = 1000
+            
+            for i, teammate_pos in enumerate(strategyData.teammate_positions):
+                teammate_unum = i + 1
+                if teammate_unum == strategyData.player_unum:
+                    continue
+                
+                # Prefer players in the box (x > 10, |y| < 7)
+                if teammate_pos[0] > 10 and abs(teammate_pos[1]) < 7:
+                    dist_to_goal = np.linalg.norm(teammate_pos - np.array([15, 0]))
+                    if dist_to_goal < best_dist_to_goal:
+                        best_dist_to_goal = dist_to_goal
+                        best_target = teammate_pos
+            
+            # If no teammate in box, aim for far post
+            if best_target is None:
+                best_target = far_post
+            
+            drawer.line(ball_pos, best_target, 3, drawer.Color.cyan, "corner_target")
+            return self.kickTarget(strategyData, strategyData.mypos, best_target)
+        
+        else:
+            # I'm an attacker - move into the box
+            drawer.annotation((0, 9), "CORNER: Moving to box" , drawer.Color.yellow, "role")
+            
+            # Different positions based on player number
+            my_unum = strategyData.player_unum
+            
+            if my_unum == 1:  # Goalkeeper stays back
+                target_pos = np.array([-13, 0])
+            elif my_unum == 2:  # Defender stays back for counter-attack defense
+                target_pos = np.array([-5, 0])
+            elif my_unum == 3:  # Near post
+                target_pos = np.array([14.5, 3 if is_right_corner else -3])
+            elif my_unum == 4:  # Far post
+                target_pos = np.array([14.5, -5 if is_right_corner else 5])
+            else:  # Penalty spot area
+                target_pos = np.array([13, -2 if (my_unum % 2 == 0) else 2])
+            
+            drawer.line(strategyData.mypos, target_pos, 2, drawer.Color.green, "corner_move")
+            return self.move(target_pos, orientation=M.target_abs_angle(target_pos, ball_pos))
+
+
+    def handle_our_free_kick(self, strategyData):
+        """
+        Specialized strategy for our free kicks
+        - Close to goal: Direct shot
+        - Far from goal: Pass to open player
+        """
+        drawer = self.world.draw
+        drawer.annotation((0,10.5), "FREE KICK: Our Attack" , drawer.Color.cyan, "status")
+        
+        ball_pos = strategyData.ball_2d
+        opponent_goal = np.array([15, 0])
+        dist_to_goal = np.linalg.norm(ball_pos - opponent_goal)
+        
+        if strategyData.active_player_unum == strategyData.robot_model.unum:
+            # I'm taking the free kick
+            
+            if dist_to_goal < 10:  # Close enough for direct shot
+                drawer.annotation((0, 9), "FREE KICK: Direct shot!" , drawer.Color.green, "role")
+                drawer.line(ball_pos, opponent_goal, 3, drawer.Color.red, "free_kick_shot")
+                return self.kickTarget(strategyData, strategyData.mypos, opponent_goal)
+            else:
+                # Too far - find closest forward teammate
+                drawer.annotation((0, 9), "FREE KICK: Looking for pass" , drawer.Color.green, "role")
+                
+                best_target = None
+                best_score = -1000
+                
+                for i, teammate_pos in enumerate(strategyData.teammate_positions):
+                    teammate_unum = i + 1
+                    if teammate_unum == strategyData.player_unum:
+                        continue
+                    
+                    # Score based on being forward and not too far
+                    score = 0
+                    if teammate_pos[0] > ball_pos[0]:  # Ahead of ball
+                        score += 100
+                    
+                    dist_from_ball = np.linalg.norm(teammate_pos - ball_pos)
+                    if dist_from_ball < 15:  # Not too far
+                        score += (15 - dist_from_ball) * 5
+                    
+                    dist_to_goal_from_teammate = np.linalg.norm(teammate_pos - opponent_goal)
+                    score += (30 - dist_to_goal_from_teammate) * 3
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_target = teammate_pos
+                
+                if best_target is not None:
+                    drawer.line(ball_pos, best_target, 3, drawer.Color.cyan, "free_kick_pass")
+                    return self.kickTarget(strategyData, strategyData.mypos, best_target)
+                else:
+                    # No good pass - kick forward
+                    forward_target = ball_pos + np.array([5, 0])
+                    return self.kickTarget(strategyData, strategyData.mypos, forward_target)
+        else:
+            # I'm support - create passing options
+            drawer.annotation((0, 9), "FREE KICK: Creating space" , drawer.Color.yellow, "role")
+            
+            # Use basic formation but push forward
+            formation_positions = GenerateBasicFormation()
+            point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
+            target_pos = point_preferences[strategyData.player_unum]
+            
+            # Push forward a bit more for free kicks
+            if target_pos[0] < 10 and strategyData.player_unum > 2:
+                target_pos = target_pos + np.array([3, 0])
+            
+            drawer.line(strategyData.mypos, target_pos, 2, drawer.Color.green, "free_kick_move")
+            return self.move(target_pos, orientation=strategyData.ball_dir)
+
+
+    def handle_our_kick_in(self, strategyData):
+        """
+        Specialized strategy for our kick-ins (throw-ins)
+        - Quick restart
+        - Pass to nearest open teammate
+        """
+        drawer = self.world.draw
+        drawer.annotation((0,10.5), "KICK-IN: Quick restart" , drawer.Color.cyan, "status")
+        
+        ball_pos = strategyData.ball_2d
+        
+        if strategyData.active_player_unum == strategyData.robot_model.unum:
+            # I'm taking the kick-in
+            drawer.annotation((0, 9), "KICK-IN: Finding nearby player" , drawer.Color.green, "role")
+            
+            # Find closest teammate (simple version)
+            best_target = None
+            best_dist = 1000
+            
+            for i, teammate_pos in enumerate(strategyData.teammate_positions):
+                teammate_unum = i + 1
+                if teammate_unum == strategyData.player_unum:
+                    continue
+                
+                dist = np.linalg.norm(teammate_pos - ball_pos)
+                
+                # Prefer closer teammates within 8m (quick restart)
+                if dist < 8 and dist > 2 and dist < best_dist:  # Not too close, not too far
+                    best_dist = dist
+                    best_target = teammate_pos
+            
+            if best_target is not None:
+                drawer.line(ball_pos, best_target, 3, drawer.Color.cyan, "kick_in_target")
+                return self.kickTarget(strategyData, strategyData.mypos, best_target)
+            else:
+                # No nearby teammate - kick forward down the line
+                forward_target = ball_pos + np.array([5, 0])
+                return self.kickTarget(strategyData, strategyData.mypos, forward_target)
+        else:
+            # I'm support - move to receive
+            drawer.annotation((0, 9), "KICK-IN: Ready to receive" , drawer.Color.yellow, "role")
+            
+            # Move slightly away from the touchline to create space
+            target_y = 0 if abs(strategyData.mypos[1]) > 8 else strategyData.mypos[1]
+            target_pos = np.array([strategyData.mypos[0], target_y])
+            
+            # If I'm close to the kick-in, move to receive
+            if np.linalg.norm(strategyData.mypos - ball_pos) < 8:
+                # Position myself to receive
+                receive_pos = ball_pos + np.array([2, -2 if ball_pos[1] > 0 else 2])
+                drawer.line(strategyData.mypos, receive_pos, 2, drawer.Color.green, "kick_in_receive")
+                return self.move(receive_pos, orientation=strategyData.ball_dir)
+            else:
+                # Hold position
+                return self.move(strategyData.mypos, orientation=strategyData.ball_dir)
+
+
+    def handle_defensive_set_play(self, strategyData):
+        """
+        Defensive strategy for opponent's set plays
+        - Mark opponents
+        - Protect goal
+        - Stay compact
+        """
+        drawer = self.world.draw
+        ball_pos = strategyData.ball_2d
+        
+        # Determine type of defensive set play
+        if strategyData.play_mode == self.world.M_THEIR_CORNER_KICK:
+            drawer.annotation((0, 9), "DEFEND: Corner kick" , drawer.Color.red, "defend_type")
+            
+            # Everyone defend the box except goalkeeper
+            if strategyData.player_unum == 1:  # Goalkeeper
+                target_pos = np.array([-13, 0])
+            else:
+                # Defend near posts and penalty area
+                is_right_corner = ball_pos[1] > 0
+                
+                if strategyData.player_unum == 2:  # Near post
+                    target_pos = np.array([-14.5, 3 if is_right_corner else -3])
+                elif strategyData.player_unum == 3:  # Far post
+                    target_pos = np.array([-14.5, -4 if is_right_corner else 4])
+                else:  # Others in the box
+                    target_pos = np.array([-12, -2 + strategyData.player_unum])
+            
+        elif strategyData.play_mode in (self.world.M_THEIR_FREE_KICK, self.world.M_THEIR_DIR_FREE_KICK):
+            drawer.annotation((0, 9), "DEFEND: Free kick" , drawer.Color.red, "defend_type")
+            
+            dist_to_our_goal = np.linalg.norm(ball_pos - np.array([-15, 0]))
+            
+            if dist_to_our_goal < 12:  # Dangerous free kick - form wall
+                # Form a defensive wall
+                if strategyData.player_unum == 1:  # Goalkeeper
+                    target_pos = np.array([-13, 0])
+                elif strategyData.player_unum in [2, 3, 4]:  # Wall players
+                    wall_y = 0 if strategyData.player_unum == 2 else (1.5 if strategyData.player_unum == 3 else -1.5)
+                    target_pos = ball_pos + np.array([-2, wall_y])  # 2m from ball
+                else:
+                    target_pos = np.array([-10, 0])
+            else:
+                # Regular defensive formation - use basic formation
+                formation_positions = GenerateBasicFormation()
+                point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
+                target_pos = point_preferences[strategyData.player_unum]
+        else:
+            # General defensive positioning - use basic formation
+            formation_positions = GenerateBasicFormation()
+            point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
+            target_pos = point_preferences[strategyData.player_unum]
+        
+        drawer.line(strategyData.mypos, target_pos, 2, drawer.Color.red, "defend_position")
+        return self.move(target_pos, orientation=strategyData.ball_dir)
 
 
     def run_play_on_strategy(self, strategyData):
         """
-        This is the "PlayOn" logic we built in Step 1.
-        We've moved it into its own function to keep select_skill clean.
+        This is the "PlayOn" logic.
+        It decides if we are an ATTACKER or SUPPORT player.
         """
-        drawer = self.world.draw
-        
         # Check if I am the active player (closest to the ball)
         if strategyData.active_player_unum == strategyData.robot_model.unum: 
             # --- I AM THE ACTIVE PLAYER ---
+            drawer = self.world.draw
             drawer.annotation((0,10.5), "ACTIVE: Attacking" , drawer.Color.red, "status")
             target = (15,0) # Opponent goal
             drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "attack_line")
-            drawer.clear("target_line") # Clear the blue formation line if it exists
+            drawer.clear("target_line") # Clear the blue formation line
+            drawer.clear("retreat_line") # Clear the orange retreat line
 
             return self.kickTarget(strategyData, strategyData.mypos, target)
 
         else:
             # --- I AM A SUPPORT PLAYER ---
-            drawer.annotation((0,10.5), "SUPPORT: Moving to position" , drawer.Color.yellow, "status")
-            
-            formation_positions = GenerateBasicFormation()
-            point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
-            strategyData.my_desired_position = point_preferences[strategyData.player_unum]
-            
-            # Draw a blue line to our assigned spot
-            drawer.line(strategyData.mypos, strategyData.my_desired_position, 2, drawer.Color.blue, "target_line")
-            drawer.clear("attack_line") # Clear the red attack line if it exists
-            
-            # Move to the assigned position, but face the ball
-            return self.move(strategyData.my_desired_position, orientation=strategyData.ball_dir)
+            # Run the dedicated support logic
+            return self.run_support_strategy(strategyData)
+    
+    def run_support_strategy(self, strategyData):
+        """
+        This is the logic for a support player.
+        We've moved it into its own function to be called from multiple game modes.
+        """
+        drawer = self.world.draw
         
+        # --- I AM A SUPPORT PLAYER ---
+        drawer.annotation((0,10.5), "SUPPORT: Moving to position" , drawer.Color.yellow, "status")
+        
+        formation_positions = GenerateBasicFormation()
+        point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
+        strategyData.my_desired_position = point_preferences[strategyData.player_unum]
+
+        # --- Give the Active Player Space ---
+        ball_pos = strategyData.ball_2d
+        assigned_pos = strategyData.my_desired_position
+        
+        dist_to_ball = np.linalg.norm(assigned_pos - ball_pos)
+        MIN_SUPPORT_DIST = 2.5 
+        
+        final_target = assigned_pos
+        drawer.clear("retreat_line") 
+        
+        if dist_to_ball < MIN_SUPPORT_DIST:
+            vec_from_ball = assigned_pos - ball_pos
+            if np.linalg.norm(vec_from_ball) > 0.1:
+                norm_vec = vec_from_ball / np.linalg.norm(vec_from_ball)
+                final_target = ball_pos + (norm_vec * MIN_SUPPORT_DIST)
+            else:
+                final_target = np.array([ball_pos[0] - MIN_SUPPORT_DIST, ball_pos[1]])
+            drawer.line(assigned_pos, final_target, 1, drawer.Color.orange, "retreat_line")
+
+        drawer.line(strategyData.mypos, final_target, 2, drawer.Color.blue, "target_line")
+        drawer.clear("attack_line") 
+        
+        # Move to the final target, but face the ball
+        return self.move(final_target, orientation=strategyData.ball_dir)
 
 
 
