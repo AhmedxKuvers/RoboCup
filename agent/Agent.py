@@ -215,43 +215,65 @@ class Agent(Base_Agent):
         drawer = self.world.draw
 
         # -----------------------------------------------------------------
-        # --- STEP 5: "MAIN BRAIN" - FIX KICK-OFF RULES ---
+        # --- STEP 7: "MAIN BRAIN" - ROLE-BASED KICK-OFF ---
         # -----------------------------------------------------------------
         
         # --- Handle Our KickOff ---
         if strategyData.play_mode == self.world.M_OUR_KICKOFF:
             drawer.annotation((0,10.5), "GAME MODE: Our KickOff" , drawer.Color.white, "status")
             
-            # Check if I am the active player (the one at the center)
+            # This coordinated play is working well.
+            RENDEZVOUS_POINT = np.array([-2.6, 3.0]) 
+            RECEIVER_UNUM = 4 # Player 4 (Midfielder)
+
             if strategyData.active_player_unum == strategyData.robot_model.unum:
-                # --- FIX for Double-Touch Foul ---
-                # Pass to our Midfielder (Player 4) instead of kicking into space
-                # strategyData.teammate_positions is 0-indexed, so unum 4 is index 3
-                target = strategyData.teammate_positions[3] 
-                drawer.annotation((0,8.5), "Passing to Player 4" , drawer.Color.cyan, "pass_target")
-                drawer.line(strategyData.mypos, target, 2, drawer.Color.cyan, "attack_line")
-                return self.kickTarget(strategyData, strategyData.mypos, target)
+                # I am the KICKER (Player 5): Pass to the rendezvous
+                drawer.annotation((0,8.5), "Passing to Rendezvous" , drawer.Color.cyan, "pass_target")
+                drawer.line(strategyData.mypos, RENDEZVOUS_POINT, 2, drawer.Color.cyan, "attack_line")
+                return self.kickTarget(strategyData, strategyData.mypos, RENDEZVOUS_POINT)
+            
+            elif strategyData.player_unum == RECEIVER_UNUM:
+                # I am the RECEIVER (Player 4): Run to the rendezvous
+                drawer.annotation((0,8.5), "Moving to Rendezvous" , drawer.Color.cyan, "pass_target")
+                drawer.line(strategyData.mypos, RENDEZVOUS_POINT, 2, drawer.Color.green, "target_line")
+                return self.move(RENDEZVOUS_POINT)
+            
             else:
-                # I am support: Hold my initial position
+                # I am everyone else (1, 2, 3): Hold my initial position
                 drawer.clear("pass_target")
                 return self.move(self.init_pos)
 
         # --- Handle Their KickOff ---
         elif strategyData.play_mode == self.world.M_THEIR_KICKOFF:
             drawer.annotation((0,10.5), "GAME MODE: Their KickOff" , drawer.Color.white, "status")
-            # --- FIX for Illegal Position ---
-            # Everyone holds their safe, initial position.
-            return self.move(self.init_pos)
+            
+            # --- FIX for Goalkeeper/Defender: Use Hard-coded Role Positions ---
+            # We are no longer using role_assignment here. We assign by unum.
+            my_target = self.init_pos # Default to init_pos
+            my_unum = strategyData.player_unum
+            
+            # Based on your player identification:
+            if my_unum == 1: # Goalkeeper
+                my_target = np.array([-14.0, 0.0]) # Stay in the goal!
+            elif my_unum == 2: # Active Attacker
+                my_target = np.array([-2.6, 3.5])  # Hold left wing (legal)
+            elif my_unum == 3: # Defender
+                my_target = np.array([-7.0, -3.0]) # Hold right defense (legal)
+            elif my_unum == 4: # Midfielder
+                my_target = np.array([-2.6, 0.0])  # Hold center (legal)
+            elif my_unum == 5: # Passive Attacker
+                my_target = np.array([-2.6, -3.5]) # Hold right wing (legal)
+
+            drawer.line(strategyData.mypos, my_target, 2, drawer.Color.blue, "target_line")
+            return self.move(my_target)
 
         # --- Handle Set Plays (KickIn, Corner, etc.) ---
         elif strategyData.PM_GROUP == self.world.MG_OUR_KICK or strategyData.PM_GROUP == self.world.MG_THEIR_KICK:
             drawer.annotation((0,10.5), "GAME MODE: Set Play" , drawer.Color.white, "status")
-            # Run our normal PlayOn logic: active player attacks, support players position.
             return self.run_play_on_strategy(strategyData)
             
         # --- Handle Regular Gameplay ---
         elif strategyData.play_mode == self.world.M_PLAY_ON:
-            # Run our normal PlayOn logic
             return self.run_play_on_strategy(strategyData)
 
         # --- Fallback / Do Nothing ---
