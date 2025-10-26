@@ -215,98 +215,106 @@ class Agent(Base_Agent):
         drawer = self.world.draw
 
         # -----------------------------------------------------------------
-        # --- STEP 2: "MAIN BRAIN" - HANDLE GAME MODES ---
+        # --- STEP 4: "MAIN BRAIN" - SMART KICK-OFF ---
         # -----------------------------------------------------------------
         
-        # --- Handle KickOff (Ours or Theirs) ---
-        if strategyData.play_mode == self.world.M_OUR_KICKOFF or strategyData.play_mode == self.world.M_THEIR_KICKOFF:
-            # During kickoff, just hold your initial position.
-            # The 'beam' function already puts us in init_pos.
-            # We'll just move there again to be safe.
-            drawer.annotation((0,10.5), "GAME MODE: KickOff" , drawer.Color.white, "status")
-            return self.move(self.init_pos)
+        # --- Handle Our KickOff ---
+        if strategyData.play_mode == self.world.M_OUR_KICKOFF:
+            drawer.annotation((0,10.5), "GAME MODE: Our KickOff" , drawer.Color.white, "status")
+            
+            # Check if I am the active player (the one at the center)
+            if strategyData.active_player_unum == strategyData.robot_model.unum:
+                # I am active: Kick the ball forward to start play
+                target = (5, 0) # Kick it 5 meters forward
+                drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "attack_line")
+                return self.kickTarget(strategyData, strategyData.mypos, target)
+            else:
+                # I am support: Hold my initial position
+                return self.move(self.init_pos)
+
+        # --- Handle Their KickOff ---
+        elif strategyData.play_mode == self.world.M_THEIR_KICKOFF:
+            drawer.annotation((0,10.5), "GAME MODE: Their KickOff" , drawer.Color.white, "status")
+            # We are on defense. Everyone acts as a support player.
+            # Run to our defensive spots but DO NOT attack the ball.
+            return self.run_support_strategy(strategyData)
 
         # --- Handle Set Plays (KickIn, Corner, etc.) ---
-        # This is when the ball is out of bounds or a foul happened.
         elif strategyData.PM_GROUP == self.world.MG_OUR_KICK or strategyData.PM_GROUP == self.world.MG_THEIR_KICK:
             drawer.annotation((0,10.5), "GAME MODE: Set Play" , drawer.Color.white, "status")
-            # For now, just have the active player attack the ball
-            # and support players hold formation.
-            # This is a good default for all set plays.
+            # Run our normal PlayOn logic: active player attacks, support players position.
             return self.run_play_on_strategy(strategyData)
             
         # --- Handle Regular Gameplay ---
         elif strategyData.play_mode == self.world.M_PLAY_ON:
-            # This is normal soccer. Run the strategy we built in Step 1.
+            # Run our normal PlayOn logic
             return self.run_play_on_strategy(strategyData)
 
         # --- Fallback / Do Nothing ---
         else:
-            # If we don't know the mode, just stand still.
             return self.move(strategyData.mypos)
 
 
     def run_play_on_strategy(self, strategyData):
         """
         This is the "PlayOn" logic.
-        We've updated it to include "social distancing" for support players.
+        It decides if we are an ATTACKER or SUPPORT player.
         """
-        drawer = self.world.draw
-        
         # Check if I am the active player (closest to the ball)
         if strategyData.active_player_unum == strategyData.robot_model.unum: 
             # --- I AM THE ACTIVE PLAYER ---
+            drawer = self.world.draw
             drawer.annotation((0,10.5), "ACTIVE: Attacking" , drawer.Color.red, "status")
             target = (15,0) # Opponent goal
             drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "attack_line")
-            drawer.clear("target_line") # Clear the blue formation line if it exists
+            drawer.clear("target_line") # Clear the blue formation line
             drawer.clear("retreat_line") # Clear the orange retreat line
 
             return self.kickTarget(strategyData, strategyData.mypos, target)
 
         else:
             # --- I AM A SUPPORT PLAYER ---
-            drawer.annotation((0,10.5), "SUPPORT: Moving to position" , drawer.Color.yellow, "status")
-            
-            formation_positions = GenerateBasicFormation()
-            point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
-            strategyData.my_desired_position = point_preferences[strategyData.player_unum]
-
-            # --- STEP 3: Give the Active Player Space ---
-            ball_pos = strategyData.ball_2d
-            assigned_pos = strategyData.my_desired_position
-            
-            # Calculate distance from our assigned spot to the ball
-            dist_to_ball = np.linalg.norm(assigned_pos - ball_pos)
-            MIN_SUPPORT_DIST = 2.5 # (in meters) You can tune this value
-            
-            final_target = assigned_pos
-            drawer.clear("retreat_line") # Clear old retreat lines
-            
-            if dist_to_ball < MIN_SUPPORT_DIST:
-                # Our spot is too close to the ball. Let's back off.
-                # Get the vector from the ball to our assigned spot
-                vec_from_ball = assigned_pos - ball_pos
-                
-                # Check for zero vector (to avoid division by zero)
-                if np.linalg.norm(vec_from_ball) > 0.1:
-                    # Normalize it and multiply by the safe distance to get a new target
-                    norm_vec = vec_from_ball / np.linalg.norm(vec_from_ball)
-                    final_target = ball_pos + (norm_vec * MIN_SUPPORT_DIST)
-                else:
-                    # We are assigned right on top of the ball, just move back
-                    final_target = np.array([ball_pos[0] - MIN_SUPPORT_DIST, ball_pos[1]])
-
-                # Draw an orange line showing our retreat path
-                drawer.line(assigned_pos, final_target, 1, drawer.Color.orange, "retreat_line")
-
-            # Draw a blue line to our final target spot
-            drawer.line(strategyData.mypos, final_target, 2, drawer.Color.blue, "target_line")
-            drawer.clear("attack_line") 
-            
-            # Move to the final target, but face the ball
-            return self.move(final_target, orientation=strategyData.ball_dir)
+            # Run the dedicated support logic
+            return self.run_support_strategy(strategyData)
+    
+    def run_support_strategy(self, strategyData):
+        """
+        This is the logic for a support player.
+        We've moved it into its own function to be called from multiple game modes.
+        """
+        drawer = self.world.draw
         
+        # --- I AM A SUPPORT PLAYER ---
+        drawer.annotation((0,10.5), "SUPPORT: Moving to position" , drawer.Color.yellow, "status")
+        
+        formation_positions = GenerateBasicFormation()
+        point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
+        strategyData.my_desired_position = point_preferences[strategyData.player_unum]
+
+        # --- Give the Active Player Space ---
+        ball_pos = strategyData.ball_2d
+        assigned_pos = strategyData.my_desired_position
+        
+        dist_to_ball = np.linalg.norm(assigned_pos - ball_pos)
+        MIN_SUPPORT_DIST = 2.5 
+        
+        final_target = assigned_pos
+        drawer.clear("retreat_line") 
+        
+        if dist_to_ball < MIN_SUPPORT_DIST:
+            vec_from_ball = assigned_pos - ball_pos
+            if np.linalg.norm(vec_from_ball) > 0.1:
+                norm_vec = vec_from_ball / np.linalg.norm(vec_from_ball)
+                final_target = ball_pos + (norm_vec * MIN_SUPPORT_DIST)
+            else:
+                final_target = np.array([ball_pos[0] - MIN_SUPPORT_DIST, ball_pos[1]])
+            drawer.line(assigned_pos, final_target, 1, drawer.Color.orange, "retreat_line")
+
+        drawer.line(strategyData.mypos, final_target, 2, drawer.Color.blue, "target_line")
+        drawer.clear("attack_line") 
+        
+        # Move to the final target, but face the ball
+        return self.move(final_target, orientation=strategyData.ball_dir)
 
 
 
