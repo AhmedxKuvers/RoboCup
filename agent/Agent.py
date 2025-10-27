@@ -306,23 +306,50 @@ class Agent(Base_Agent):
     def run_support_strategy(self, strategyData):
         """
         This is the logic for a support player.
-        We've moved it into its own function to be called from multiple game modes.
+        --- STEP 8: DYNAMIC FORMATIONS ---
+        We no longer use static formations. We give each player a "job"
+        relative to the ball's position.
         """
         drawer = self.world.draw
         
-        # --- I AM A SUPPORT PLAYER ---
-        drawer.annotation((0,10.5), "SUPPORT: Moving to position" , drawer.Color.yellow, "status")
-        
-        formation_positions = GenerateBasicFormation()
-        point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
-        strategyData.my_desired_position = point_preferences[strategyData.player_unum]
-
-        # --- Give the Active Player Space ---
+        my_unum = strategyData.player_unum
         ball_pos = strategyData.ball_2d
-        assigned_pos = strategyData.my_desired_position
+        
+        # --- Define Dynamic Role Positions ---
+        if my_unum == 1: # Goalkeeper
+            # Stay in the goal, but follow the ball's y-axis
+            my_target = np.array([-14.0, np.clip(ball_pos[1], -3.0, 3.0)])
+            
+        elif my_unum == 3: # Defender
+            # "Shadow" the ball from a defensive position.
+            # Stay 4m behind the ball, but don't cross the center line.
+            x_pos = np.clip(ball_pos[0] - 4.0, -13.0, 0.0) 
+            y_pos = np.clip(ball_pos[1] * 0.5, -5.0, 5.0) # Stay somewhat central
+            my_target = np.array([x_pos, y_pos])
+            
+        elif my_unum == 4: # Midfielder
+            # Provide width. Stay 1m behind the ball, but 6m to the side.
+            x_pos = np.clip(ball_pos[0] - 1.0, -10.0, 10.0)
+            # Stay on the opposite side of the field from the ball
+            y_pos = 6.0 if ball_pos[1] < 0 else -6.0 
+            my_target = np.array([x_pos, y_pos])
+
+        elif my_unum == 2 or my_unum == 5: # Non-Active Attacker
+            # Position for a "through-ball" or rebound.
+            # Get 2m ahead of the ball, slightly off-center.
+            x_pos = np.clip(ball_pos[0] + 2.0, -10.0, 13.0)
+            y_pos = ball_pos[1] + 3.0 if my_unum == 2 else ball_pos[1] - 3.0
+            my_target = np.array([x_pos, np.clip(y_pos, -7.0, 7.0)])
+            
+        else:
+            # Fallback for any other players
+            my_target = self.init_pos
+
+        # --- Now run the collision-avoidance logic from Step 3 ---
+        assigned_pos = my_target
         
         dist_to_ball = np.linalg.norm(assigned_pos - ball_pos)
-        MIN_SUPPORT_DIST = 2.5 
+        MIN_SUPPORT_DIST = 3.0 # Increased this to 3.0m
         
         final_target = assigned_pos
         drawer.clear("retreat_line") 
